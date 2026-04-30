@@ -1,5 +1,5 @@
 # UltimateTicTacToe
-Project for 440
+440 Final Project
 
 # Useful Testing Commands:
 
