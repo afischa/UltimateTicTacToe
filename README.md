@@ -1,6 +1,8 @@
 # UltimateTicTacToe
 440 Final Project
 
+How to run: https://youtu.be/sKRS7Cmn8y0
+
 # Useful Testing Commands:
 
 python ai_tests.py --games 100
