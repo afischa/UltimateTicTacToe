@@ -1,7 +1,7 @@
 # UltimateTicTacToe
 Project for 440
 
-Useful Testing Commands:
+# Useful Testing Commands:
 
 python ai_tests.py --games 100
 
