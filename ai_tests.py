@@ -226,13 +226,21 @@ def test_blocker_agent_blocks_local_win():
     assert blocker_agent(game, "X") == (2, 2, 0, 2)
 
 
+UNIT_TESTS = (
+    ("completed target board allows anywhere", test_completed_target_board_allows_anywhere),
+    ("main AI takes immediate local board win", test_ai_takes_local_board_win),
+    ("main AI takes immediate global win", test_ai_takes_global_win),
+    ("greedy baseline takes immediate local board win", test_greedy_local_win_agent_takes_board),
+    ("blocker baseline blocks immediate local board win", test_blocker_agent_blocks_local_win),
+)
+
+
 def run_unit_tests():
-    test_completed_target_board_allows_anywhere()
-    test_ai_takes_local_board_win()
-    test_ai_takes_global_win()
-    test_greedy_local_win_agent_takes_board()
-    test_blocker_agent_blocks_local_win()
-    print("Unit tests passed.")
+    print("Unit tests")
+    for name, test in UNIT_TESTS:
+        test()
+        print(f"  PASS - {name}")
+    print(f"Unit tests passed: {len(UNIT_TESTS)}/{len(UNIT_TESTS)}")
 
 
 def run_benchmark(games, depth, seed, opponent_name):
@@ -256,34 +264,80 @@ def run_benchmark(games, depth, seed, opponent_name):
         else:
             ai_results["loss"] += 1
 
-    print(
-        f"Played {games} games with minimax depth {depth} against "
-        f"{opponent_name} baseline, alternating first player."
-    )
-    print(f"Raw results: X={results['X']} O={results['O']} draws={results['draw']}")
-    print(
-        "AI results: "
-        f"wins={ai_results['win']} losses={ai_results['loss']} draws={ai_results['draw']}"
-    )
-    print("Use this as a regression trend, not a proof of optimal play.")
+    return {
+        "opponent": opponent_name,
+        "games": games,
+        "depth": depth,
+        "seed": seed,
+        "x_wins": results["X"],
+        "o_wins": results["O"],
+        "ai_wins": ai_results["win"],
+        "ai_losses": ai_results["loss"],
+        "draws": ai_results["draw"],
+    }
+
+
+def print_benchmark_report(rows):
+    if not rows:
+        return
+
+    print()
+    print("Benchmarks")
+    print("Opponent | Games | Depth | AI Wins | AI Losses | Draws | X Wins | O Wins")
+    print("-" * 74)
+    for row in rows:
+        print(
+            f"{row['opponent']:<8} | "
+            f"{row['games']:>5} | "
+            f"{row['depth']:>5} | "
+            f"{row['ai_wins']:>7} | "
+            f"{row['ai_losses']:>9} | "
+            f"{row['draws']:>5} | "
+            f"{row['x_wins']:>6} | "
+            f"{row['o_wins']:>6}"
+        )
+    print()
+    print("AI wins/losses/draws are from the minimax AI perspective.")
+    print("X/O wins show raw first-symbol results while the benchmark alternates who starts.")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Headless checks for the Ultimate Tic Tac Toe AI.")
-    parser.add_argument("--benchmark", type=int, default=0, help="Run this many minimax-vs-random games.")
+    parser.add_argument(
+        "--games",
+        type=int,
+        default=10,
+        help="Games to play against each selected baseline opponent.",
+    )
+    parser.add_argument(
+        "--benchmark",
+        type=int,
+        default=None,
+        help="Deprecated alias for --games. If supplied, it overrides --games.",
+    )
     parser.add_argument("--depth", type=int, default=2, help="Search depth for benchmark games.")
     parser.add_argument(
         "--opponent",
-        choices=sorted(BASELINE_AGENTS),
-        default="random",
-        help="Baseline agent for benchmark games.",
+        choices=["all"] + sorted(BASELINE_AGENTS),
+        default="all",
+        help="Baseline agent for benchmark games, or all to run every baseline.",
     )
+    parser.add_argument("--skip-benchmarks", action="store_true", help="Only run unit tests.")
     parser.add_argument("--seed", type=int, default=440, help="Random seed for reproducible results.")
     args = parser.parse_args()
 
+    games = args.benchmark if args.benchmark is not None else args.games
+    if games < 1:
+        raise ValueError("--games must be at least 1")
+
     run_unit_tests()
-    if args.benchmark:
-        run_benchmark(args.benchmark, args.depth, args.seed, args.opponent)
+    if not args.skip_benchmarks:
+        opponents = sorted(BASELINE_AGENTS) if args.opponent == "all" else [args.opponent]
+        rows = [
+            run_benchmark(games, args.depth, args.seed + index * games, opponent_name)
+            for index, opponent_name in enumerate(opponents)
+        ]
+        print_benchmark_report(rows)
 
 
 if __name__ == "__main__":
