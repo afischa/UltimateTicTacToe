@@ -565,6 +565,7 @@ class UltimateTicTacToe:
             self.status.config(text="Game is a draw!")
 
     def choose_ai_move(self, depth=None):
+        """Pick the move with the best minimax score for the current AI player."""
         depth = self.search_depth if depth is None else depth
         valid_moves = self.get_valid_moves()
         if not valid_moves:
@@ -574,6 +575,8 @@ class UltimateTicTacToe:
         best_moves = []
 
         for move in self.order_moves(valid_moves, self.ai_player):
+            # Try the move on the real board data, score the future, then undo it.
+            # This avoids copying all 81 cells for every branch in the game tree.
             undo = self.apply_simulated_move(move, self.ai_player)
             score = self.minimax(depth - 1, float("-inf"), float("inf"), False)
             self.undo_simulated_move(undo)
@@ -587,6 +590,12 @@ class UltimateTicTacToe:
         return random.choice(best_moves)
 
     def order_moves(self, moves, player):
+        """
+        Sort likely-good moves first so alpha-beta pruning can cut more branches.
+
+        This ordering is not the final evaluation. It is a speed helper for minimax:
+        alpha-beta is most effective when winning/blocking moves are searched early.
+        """
         opponent = "X" if player == "O" else "O"
         move_scores = []
 
@@ -596,23 +605,30 @@ class UltimateTicTacToe:
 
             undo = self.apply_simulated_move(move, player)
             if self.has_three_in_a_row(self.big_wins, player):
+                # Highest priority: a move that wins the global game immediately.
                 score += 10000
             elif self.big_wins[br][bc] == player:
+                # Strong priority: a move that wins the local board.
                 score += 500
             self.undo_simulated_move(undo)
 
             undo = self.apply_simulated_move(move, opponent)
             if self.has_three_in_a_row(self.big_wins, opponent):
+                # Search urgent blocks early when the opponent has a global win threat.
                 score += 9000
             elif self.big_wins[br][bc] == opponent:
+                # Also prioritize blocking an immediate local-board win.
                 score += 350
             self.undo_simulated_move(undo)
 
+            # Positional tie-breakers. Center boards/cells participate in more lines,
+            # so they are usually more valuable than edges.
             if (br, bc) == (1, 1):
                 score += 30
             if (r, c) == (1, 1):
                 score += 10
             if self.big_wins[r][c] != EMPTY or self.is_full(self.boards[r][c]):
+                # Sending the opponent to a completed board gives them free choice.
                 score -= 40
 
             move_scores.append((score, move))
@@ -621,12 +637,15 @@ class UltimateTicTacToe:
         return [move for _, move in move_scores]
 
     def get_valid_moves(self):
+        """Return legal moves under Ultimate Tic Tac Toe's forced-board rule."""
         valid_moves = []
         target = self.next_board
 
         if target is not None:
             br, bc = target
             if self.big_wins[br][bc] != EMPTY or self.is_full(self.boards[br][bc]):
+                # If the forced destination is already won/full, the player may
+                # choose any open cell on any unfinished local board.
                 target = None
 
         if target is None:
@@ -647,9 +666,22 @@ class UltimateTicTacToe:
         return valid_moves
 
     def minimax(self, depth, alpha, beta, is_maximizing):
+        """
+        Depth-limited minimax with alpha-beta pruning.
+
+        Minimax alternates between:
+        - maximizing turns, where the AI chooses the highest-scoring future.
+        - minimizing turns, where we assume the opponent chooses the worst future
+          for the AI.
+
+        Searching the whole Ultimate Tic Tac Toe tree is too large for live play,
+        so when depth reaches 0 we estimate the position with evaluate_position().
+        """
         opponent = "X" if self.ai_player == "O" else "O"
 
         if self.has_three_in_a_row(self.big_wins, self.ai_player):
+            # Terminal scores must dwarf heuristic scores so an actual game win is
+            # always preferred over a merely promising non-terminal position.
             return 10000000 + depth
         if self.has_three_in_a_row(self.big_wins, opponent):
             return -10000000 - depth
@@ -670,6 +702,8 @@ class UltimateTicTacToe:
                 max_eval = max(max_eval, eval_score)
                 alpha = max(alpha, eval_score)
                 if beta <= alpha:
+                    # Beta cutoff: the minimizing player already has a better
+                    # alternative elsewhere, so this branch cannot be chosen.
                     break
             return max_eval
 
@@ -681,10 +715,13 @@ class UltimateTicTacToe:
             min_eval = min(min_eval, eval_score)
             beta = min(beta, eval_score)
             if beta <= alpha:
+                # Alpha cutoff: the maximizing player already has a better
+                # alternative elsewhere, so this branch cannot be chosen.
                 break
         return min_eval
 
     def apply_simulated_move(self, move, player):
+        """Apply a hypothetical move and return enough state to undo it exactly."""
         br, bc, r, c = move
         old_cell = self.boards[br][bc][r][c]
         old_big_win = self.big_wins[br][bc]
@@ -698,6 +735,7 @@ class UltimateTicTacToe:
         return move, old_cell, old_big_win, old_next_board
 
     def undo_simulated_move(self, undo):
+        """Restore the board, local winner, and forced-board target after search."""
         move, old_cell, old_big_win, old_next_board = undo
         br, bc, r, c = move
         self.boards[br][bc][r][c] = old_cell
@@ -705,26 +743,42 @@ class UltimateTicTacToe:
         self.next_board = old_next_board
 
     def evaluate_position(self):
+        """
+        Heuristic score used when minimax reaches its depth limit.
+
+        Positive values favor the AI. Negative values favor the opponent. The
+        global board is weighted most heavily because local boards matter mainly
+        as steps toward three-in-a-row on the global board.
+        """
         score = 0
         opponent = "X" if self.ai_player == "O" else "O"
 
+        # Global threats/wins are the main objective, so each global line is
+        # multiplied by a large weight.
         score += self.evaluate_board(self.big_wins, weight=500, strategic=True)
 
         if self.next_board is None:
+            # Free choice is usually useful because the AI can pick the most
+            # tactically valuable unfinished board.
             score += 35
         else:
             br, bc = self.next_board
             board_score = self.evaluate_board(self.boards[br][bc], weight=18, strategic=True)
             score += board_score
             if self.player_can_win_board(br, bc, opponent):
+                # Being forced into a board where the opponent has a one-move
+                # local win is dangerous.
                 score -= 120
             if self.player_can_win_board(br, bc, self.ai_player):
+                # Being sent to a board where the AI has a one-move local win is good.
                 score += 90
 
         for br in range(3):
             for bc in range(3):
                 owner = self.big_wins[br][bc]
                 if owner == self.ai_player:
+                    # Already-won local boards are scored by their global-board
+                    # location: center > corner > edge.
                     score += self.square_weight(br, bc) * 30
                 elif owner == opponent:
                     score -= self.square_weight(br, bc) * 30
@@ -738,6 +792,7 @@ class UltimateTicTacToe:
         return score
 
     def square_weight(self, r, c):
+        """Value global/local positions by how many winning lines they influence."""
         if (r, c) == (1, 1):
             return 6
         if (r, c) in ((0, 0), (0, 2), (2, 0), (2, 2)):
@@ -745,6 +800,7 @@ class UltimateTicTacToe:
         return 3
 
     def player_can_win_board(self, br, bc, player):
+        """True when player has any two-in-a-row plus an empty cell locally."""
         board = self.boards[br][bc]
         for line in LINES:
             values = [board[r][c] for r, c in line]
@@ -753,6 +809,13 @@ class UltimateTicTacToe:
         return False
 
     def evaluate_board(self, board, weight=1, strategic=False):
+        """
+        Score all eight lines of a 3x3 board.
+
+        The same function works for both a local board and the global board.
+        weight controls how important this board is in the larger evaluation.
+        strategic=True makes line threats much larger for global/forced-board use.
+        """
         score = 0
         opponent = "X" if self.ai_player == "O" else "O"
 
@@ -766,6 +829,17 @@ class UltimateTicTacToe:
         return score
 
     def score_line(self, ai_count, opponent_count, empty_count, strategic=False):
+        """
+        Score one row/column/diagonal.
+
+        Award structure:
+        - 3 AI marks: very large positive line score.
+        - 3 opponent marks: very large negative line score.
+        - 2 plus empty: strong threat or urgent block.
+        - 1 plus two empty: small future potential.
+        Blocked lines containing both players are worth 0 because neither side
+        can complete that line anymore.
+        """
         if ai_count and opponent_count:
             return 0
         if ai_count == 3:

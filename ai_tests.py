@@ -38,6 +38,7 @@ def game_result(game):
 
 
 def random_agent(game, player):
+    """Baseline that knows only the rules: choose any legal move uniformly."""
     return random.choice(game.get_valid_moves())
 
 
@@ -46,6 +47,12 @@ def opponent(player):
 
 
 def line_winning_move(game, moves, player):
+    """
+    Return an immediate winning move for player, if one exists.
+
+    Global wins are checked before local-board wins because ending the whole game
+    is strictly better than only claiming one local board.
+    """
     for move in moves:
         undo = game.apply_simulated_move(move, player)
         won_local = game.big_wins[move[0]][move[1]] == player
@@ -65,6 +72,12 @@ def line_winning_move(game, moves, player):
 
 
 def greedy_local_win_agent(game, player):
+    """
+    Greedy baseline:
+    1. Take an immediate global win.
+    2. Otherwise take an immediate local-board win.
+    3. Otherwise choose a simple positional square.
+    """
     moves = game.get_valid_moves()
     winning_move = line_winning_move(game, moves, player)
     if winning_move:
@@ -73,6 +86,12 @@ def greedy_local_win_agent(game, player):
 
 
 def blocker_agent(game, player):
+    """
+    Defensive baseline:
+    1. Win immediately if possible.
+    2. Otherwise block the opponent's immediate global/local win.
+    3. Otherwise choose a simple positional square.
+    """
     moves = game.get_valid_moves()
     winning_move = line_winning_move(game, moves, player)
     if winning_move:
@@ -86,6 +105,17 @@ def blocker_agent(game, player):
 
 
 def older_ai_agent(game, player):
+    """
+    Lightweight scoring baseline modeled after the project's earlier AI idea.
+
+    It does not recurse like minimax. It scores each legal move once:
+    - +10000 for an immediate global win.
+    - +100 for an immediate local-board win.
+    - +50 if the same square would let the opponent win that local board, so it
+      works as a basic block.
+    - +10 for playing in the center local board.
+    - +4 for playing the center cell inside a local board.
+    """
     moves = game.get_valid_moves()
     scored_moves = []
     other = opponent(player)
@@ -118,6 +148,7 @@ def older_ai_agent(game, player):
 
 
 def prefer_positional_move(moves):
+    """Shared fallback that prefers center, then corners, over edge positions."""
     def score(move):
         br, bc, r, c = move
         value = 0
@@ -226,12 +257,95 @@ def test_blocker_agent_blocks_local_win():
     assert blocker_agent(game, "X") == (2, 2, 0, 2)
 
 
+def test_random_agent_returns_legal_move_on_forced_board():
+    random.seed(7)
+    game = make_headless_game()
+    game.next_board = (1, 2)
+    game.boards[1][2][0][0] = "X"
+    game.boards[1][2][0][1] = "O"
+
+    move = random_agent(game, "X")
+
+    assert move in game.get_valid_moves()
+    assert move[:2] == (1, 2)
+
+
+def test_greedy_agent_prefers_global_win_over_local_win():
+    game = make_headless_game()
+    game.big_wins[0][0] = "X"
+    game.big_wins[0][1] = "X"
+    game.next_board = None
+    game.boards[0][2][2][0] = "X"
+    game.boards[0][2][2][1] = "X"
+    game.boards[1][1][0][0] = "X"
+    game.boards[1][1][0][1] = "X"
+
+    assert greedy_local_win_agent(game, "X") == (0, 2, 2, 2)
+
+
+def test_blocker_agent_wins_before_blocking():
+    game = make_headless_game()
+    game.next_board = None
+    game.boards[0][0][1][0] = "X"
+    game.boards[0][0][1][1] = "X"
+    game.boards[2][2][0][0] = "O"
+    game.boards[2][2][0][1] = "O"
+
+    assert blocker_agent(game, "X") == (0, 0, 1, 2)
+
+
+def test_older_agent_prefers_center_board_and_cell():
+    game = make_headless_game()
+    game.next_board = None
+
+    assert older_ai_agent(game, "X") == (1, 1, 1, 1)
+
+
+def test_forced_full_board_allows_anywhere_else():
+    game = make_headless_game()
+    game.next_board = (0, 0)
+    game.boards[0][0] = [
+        ["X", "O", "X"],
+        ["O", "X", "O"],
+        ["O", "X", "O"],
+    ]
+
+    moves = game.get_valid_moves()
+
+    assert moves
+    assert all(move[:2] != (0, 0) for move in moves)
+    assert len(moves) == 72
+
+
+def test_simulated_move_undo_restores_state():
+    game = make_headless_game()
+    game.next_board = (0, 0)
+    game.boards[0][0][0][0] = "O"
+    game.boards[0][0][0][1] = "O"
+
+    undo = game.apply_simulated_move((0, 0, 0, 2), "O")
+    assert game.big_wins[0][0] == "O"
+    assert game.next_board == (0, 2)
+
+    game.undo_simulated_move(undo)
+
+    assert game.boards[0][0][0][2] == EMPTY
+    assert game.big_wins[0][0] == EMPTY
+    assert game.next_board == (0, 0)
+
+
 UNIT_TESTS = (
     ("completed target board allows anywhere", test_completed_target_board_allows_anywhere),
+    ("forced full target board allows anywhere else", test_forced_full_board_allows_anywhere_else),
+    ("simulated move undo restores state", test_simulated_move_undo_restores_state),
     ("main AI takes immediate local board win", test_ai_takes_local_board_win),
     ("main AI takes immediate global win", test_ai_takes_global_win),
+    ("random baseline returns a legal forced-board move", test_random_agent_returns_legal_move_on_forced_board),
     ("greedy baseline takes immediate local board win", test_greedy_local_win_agent_takes_board),
+    ("greedy baseline prefers global win over local win", test_greedy_agent_prefers_global_win_over_local_win),
     ("blocker baseline blocks immediate local board win", test_blocker_agent_blocks_local_win),
+    ("blocker baseline wins before blocking", test_blocker_agent_wins_before_blocking),
+    ("older baseline prefers center board and center cell", test_older_agent_prefers_center_board_and_cell),
 )
 
 
